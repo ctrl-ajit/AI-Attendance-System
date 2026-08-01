@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Students{% endblock %}
+{% block content %}
+    <h1>Enrolled Students</h1>
+    <div class="note">
+        To enroll a new student or start a live attendance session, run these from the terminal
+        (they need direct webcam access):<br>
+        <code>python enroll.py</code> &nbsp;|&nbsp; <code>python recognizer.py</code>
+    </div>
+
+    {% if students %}
+    <table>
+        <tr><th>ID</th><th>Name</th><th>Roll No</th></tr>
+        {% for s in students %}
+        <tr><td>{{ s.id }}</td><td>{{ s.name }}</td><td>{{ s.roll_no }}</td></tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No students enrolled yet. Run <code>python enroll.py</code> to add one.</p>
+    {% endif %}
+{% endblock %}

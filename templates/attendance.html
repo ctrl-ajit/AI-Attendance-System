@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Attendance Records{% endblock %}
+{% block content %}
+    <h1>Attendance Records</h1>
+
+    <form method="get" action="/attendance">
+        <label>Filter by date (YYYY-MM-DD): </label>
+        <input type="text" name="date" value="{{ date_filter or '' }}" placeholder="2026-08-01">
+        <button type="submit">Filter</button>
+    </form>
+
+    <a class="btn" href="/export{% if date_filter %}?date={{ date_filter }}{% endif %}">Export as CSV</a>
+
+    {% if records %}
+    <table>
+        <tr><th>Name</th><th>Roll No</th><th>Date</th><th>Time</th></tr>
+        {% for r in records %}
+        <tr><td>{{ r.name }}</td><td>{{ r.roll_no }}</td><td>{{ r.date }}</td><td>{{ r.time }}</td></tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p>No attendance records found.</p>
+    {% endif %}
+{% endblock %}
