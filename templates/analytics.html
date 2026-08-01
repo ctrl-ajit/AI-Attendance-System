@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Analytics{% endblock %}
+{% block content %}
+    <h1>Attendance Analytics</h1>
+
+    {% set total_students = summary|length %}
+    {% set defaulter_count = summary|selectattr("is_defaulter")|list|length %}
+
+    <div class="stat-cards">
+        <div class="stat-card">
+            <div class="value">{{ total_students }}</div>
+            <div class="label">Total Students</div>
+        </div>
+        <div class="stat-card">
+            <div class="value">{{ defaulter_count }}</div>
+            <div class="label">Below 75% Attendance</div>
+        </div>
+    </div>
+
+    <h2>Attendance Trend</h2>
+    <canvas id="trendChart" height="80"></canvas>
+
+    <h2>Per-Student Attendance</h2>
+    <div class="note">
+        Rows highlighted in red are below the 75% attendance threshold.
+    </div>
+    <table>
+        <tr><th>Name</th><th>Roll No</th><th>Days Present</th><th>Total Class Days</th><th>Attendance %</th></tr>
+        {% for s in summary %}
+        <tr class="{{ 'defaulter' if s.is_defaulter else '' }}">
+            <td>{{ s.name }}</td>
+            <td>{{ s.roll_no }}</td>
+            <td>{{ s.days_present }}</td>
+            <td>{{ s.total_class_days }}</td>
+            <td class="{{ 'pct-bad' if s.is_defaulter else 'pct-good' }}">{{ s.percentage }}%</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script>
+        const ctx = document.getElementById('trendChart');
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: {{ chart_labels|safe }},
+                datasets: [{
+                    label: 'Students Present',
+                    data: {{ chart_values|safe }},
+                    borderColor: '#2980b9',
+                    backgroundColor: 'rgba(41, 128, 185, 0.1)',
+                    tension: 0.2,
+                    fill: true,
+                }]
+            },
+            options: {
+                scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    </script>
+{% endblock %}

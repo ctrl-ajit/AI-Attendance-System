@@ -13,12 +13,20 @@
         .btn { display: inline-block; padding: 8px 16px; background: #2980b9; color: white;
                border-radius: 4px; text-decoration: none; margin-top: 10px; }
         .note { background: #fef9e7; padding: 12px; border-left: 4px solid #f4d03f; margin: 15px 0; }
+        .defaulter { background: #fdecea; }
+        .stat-cards { display: flex; gap: 15px; margin: 15px 0; }
+        .stat-card { flex: 1; background: #f4f6f7; padding: 15px; border-radius: 6px; text-align: center; }
+        .stat-card .value { font-size: 28px; font-weight: bold; color: #2c3e50; }
+        .stat-card .label { color: #666; font-size: 13px; }
+        .pct-good { color: #27ae60; font-weight: bold; }
+        .pct-bad { color: #c0392b; font-weight: bold; }
     </style>
 </head>
 <body>
     <nav>
         <a href="/">Students</a>
         <a href="/attendance">Attendance Records</a>
+        <a href="/analytics">Analytics</a>
     </nav>
     <hr>
     {% block content %}{% endblock %}
