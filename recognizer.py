@@ -19,6 +19,11 @@ from database import init_db, mark_attendance, get_all_students
 ENCODINGS_FILE = "encodings.pickle"
 TOLERANCE = 0.5  # lower = stricter match. 0.5-0.6 is typical.
 
+# Set to True temporarily to print live edge_density / skin_ratio values to the
+# terminal - use this to figure out the right threshold values for your own
+# webcam and lighting, then set back to False once tuned.
+DEBUG_ACCESSORY_VALUES = False
+
 # --- Liveness detection (blink check) settings ---
 # Prevents marking attendance from a photo held up to the camera -
 # a photo can't blink, a real person can.
@@ -42,12 +47,92 @@ def eye_aspect_ratio(eye_points):
     return ear
 
 
+# --- Mask detection settings ---
+# Lightweight heuristic (no separate trained model needed): looks at the lower
+# half of the face box (nose/mouth region) and measures edge density using
+# Canny edge detection. A bare mouth/nose area has a lot of fine detail (lips,
+# nostrils, teeth, shadows under the nose) which produces many edges. A cloth
+# or surgical mask is comparatively flat and uniform, producing far fewer
+# edges. This is a simple proxy, not a trained classifier - a CNN-based mask
+# classifier would be more robust and is noted as future scope.
+MASK_EDGE_DENSITY_THRESHOLD = 0.065
+
+
+def get_lower_face_edge_density(frame, top, right, bottom, left):
+    """Returns the raw edge-density value for the lower-face region (0.0 to 1.0)."""
+    face_height = bottom - top
+    lower_top = top + face_height // 2
+    lower_region = frame[lower_top:bottom, left:right]
+
+    if lower_region.size == 0:
+        return 1.0  # treat empty region as "not masked" (fail safe)
+
+    gray = cv2.cvtColor(lower_region, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    return np.count_nonzero(edges) / edges.size
+
+
+# --- Cap/hat detection settings ---
+# Another lightweight heuristic: a cap covers the forehead (the region between
+# the top of the face box and the eyebrows). We check what fraction of that
+# region looks like skin tone using an HSV color threshold. Bare forehead =
+# mostly skin-colored pixels. A cap (usually fabric, any color) = low skin
+# ratio in that region.
+# Known limitation (worth stating honestly in the report): fixed HSV skin
+# thresholds work less reliably across all skin tones and lighting conditions -
+# a trained classifier would be more robust. Same caveat applies to hair
+# covering the forehead, which can also trigger a false "cap detected".
+CAP_SKIN_RATIO_THRESHOLD = 0.15
+SKIN_HSV_LOWER = np.array([0, 20, 70], dtype=np.uint8)
+SKIN_HSV_UPPER = np.array([20, 150, 255], dtype=np.uint8)
+
+
+def get_forehead_skin_ratio(frame, top, right, left, landmarks, scale_factor=4):
+    """Returns the raw skin-tone ratio (0.0 to 1.0) for the forehead region. Returns None if it can't be measured."""
+    if "left_eyebrow" not in landmarks or "right_eyebrow" not in landmarks:
+        return None
+
+    eyebrow_points = landmarks["left_eyebrow"] + landmarks["right_eyebrow"]
+    eyebrow_ys = [p[1] * scale_factor for p in eyebrow_points]
+    forehead_bottom = min(eyebrow_ys)
+
+    if forehead_bottom <= top:
+        return None
+
+    forehead_region = frame[top:forehead_bottom, left:right]
+    if forehead_region.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(forehead_region, cv2.COLOR_BGR2HSV)
+    skin_mask = cv2.inRange(hsv, SKIN_HSV_LOWER, SKIN_HSV_UPPER)
+    return np.count_nonzero(skin_mask) / skin_mask.size
+
+
 def load_encodings():
     if not os.path.exists(ENCODINGS_FILE):
         print("No encodings found. Run enroll.py first.")
         return {}
     with open(ENCODINGS_FILE, "rb") as f:
         return pickle.load(f)
+
+
+# --- Lighting sufficiency check ---
+# Both the mask and cap heuristics rely on seeing real detail/color in the
+# face - which fails under backlighting or a dark room, producing false
+# "mask"/"cap detected" results even on a bare face. Rather than reporting
+# an unreliable guess, we check overall brightness first and skip the
+# accessory checks entirely if it's too dark, showing a lighting warning
+# instead. This is a known, documented limitation of heuristic (non-ML)
+# accessory detection.
+MIN_BRIGHTNESS_FOR_ACCESSORY_CHECK = 60  # 0-255 grayscale scale
+
+
+def get_face_brightness(frame, top, right, bottom, left):
+    face_region = frame[top:bottom, left:right]
+    if face_region.size == 0:
+        return 255  # assume bright enough if we can't measure, fail safe
+    gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
+    return float(np.mean(gray))
 
 
 def build_lookup():
@@ -95,6 +180,28 @@ def run_recognition():
         for (top, right, bottom, left), face_encoding, landmarks in zip(
             face_locations, face_encodings, face_landmarks_list
         ):
+            # scale up face location now (frame was resized by 0.25 for detection speed)
+            # so both mask-detection and drawing use full-resolution pixels
+            top, right, bottom, left = top * 4, right * 4, bottom * 4, left * 4
+
+            brightness = get_face_brightness(frame, top, right, bottom, left)
+            lighting_ok = brightness >= MIN_BRIGHTNESS_FOR_ACCESSORY_CHECK
+
+            if lighting_ok:
+                edge_density = get_lower_face_edge_density(frame, top, right, bottom, left)
+                skin_ratio = get_forehead_skin_ratio(frame, top, right, left, landmarks)
+                mask_detected = edge_density < MASK_EDGE_DENSITY_THRESHOLD
+                cap_detected = skin_ratio is not None and skin_ratio < CAP_SKIN_RATIO_THRESHOLD
+            else:
+                edge_density, skin_ratio = None, None
+                mask_detected, cap_detected = False, False
+
+            if DEBUG_ACCESSORY_VALUES:
+                edge_display = f"{edge_density:.3f}" if edge_density is not None else "N/A"
+                skin_display = f"{skin_ratio:.3f}" if skin_ratio is not None else "N/A"
+                print(f"[debug] brightness={brightness:.1f} (need >= {MIN_BRIGHTNESS_FOR_ACCESSORY_CHECK})  "
+                      f"edge_density={edge_display}  skin_ratio={skin_display}  lighting_ok={lighting_ok}")
+
             distances = face_recognition.face_distance(known_encodings, face_encoding)
             best_match_index = np.argmin(distances) if len(distances) else None
 
@@ -106,6 +213,7 @@ def run_recognition():
                 student = students.get(student_id)
                 if student:
                     # --- Liveness check: has this person blinked yet? ---
+                    # Eyes stay visible even with a mask on, so this still works.
                     tracker = blink_tracker.setdefault(
                         student_id, {"consec_closed": 0, "blinked": False}
                     )
@@ -122,24 +230,32 @@ def run_recognition():
                                 tracker["blinked"] = True  # eyes closed then reopened = a blink
                             tracker["consec_closed"] = 0
 
+                    tags = []
+                    if mask_detected:
+                        tags.append("MASK")
+                    if cap_detected:
+                        tags.append("CAP")
+                    if not lighting_ok:
+                        tags.append("LOW LIGHT")
+                    accessory_tag = f" [{', '.join(tags)}]" if tags else ""
+
                     if tracker["blinked"]:
-                        name_label = f"{student['name']} (verified)"
+                        name_label = f"{student['name']} (verified){accessory_tag}"
                         color = (0, 255, 0)
 
                         if student_id not in already_marked_this_session:
                             marked = mark_attendance(int(student_id))
                             already_marked_this_session.add(student_id)
                             if marked:
-                                print(f"Attendance marked: {student['name']} ({student['roll_no']})")
+                                tag_note = f" [{', '.join(tags)}]" if tags else ""
+                                print(f"Attendance marked: {student['name']} ({student['roll_no']}){tag_note}")
                     else:
-                        name_label = f"{student['name']} (blink to verify)"
+                        name_label = f"{student['name']} (blink to verify){accessory_tag}"
                         color = (0, 165, 255)  # orange = recognized but not yet verified
 
-            # scale back up face location (since frame was resized by 0.25)
-            top, right, bottom, left = top * 4, right * 4, bottom * 4, left * 4
             cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
             cv2.putText(frame, name_label, (left, top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
         cv2.imshow("Attendance - press q to stop", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
