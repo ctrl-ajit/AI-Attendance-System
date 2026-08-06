@@ -69,4 +69,8 @@ def export_csv():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    # host="0.0.0.0" is required for cloud hosting platforms (Render, etc.)
+    # to route external traffic to this app - 127.0.0.1 only works locally.
+    app.run(host="0.0.0.0", port=port, debug=False)
